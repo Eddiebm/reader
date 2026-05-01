@@ -7,10 +7,12 @@ export default function SetupPage() {
         <p className="font-ui text-xs uppercase tracking-[0.2em] text-goldMuted">READER · Phase One</p>
         <h1 className="mt-3 font-reading text-4xl text-stone-100">Setup</h1>
         <p className="mt-4 font-reading text-lg leading-relaxed text-stone-400">
-          OpenAI and Anthropic keys live only on the server. Add{" "}
-          <code className="font-ui text-gold">OPENAI_API_KEY</code> and{" "}
-          <code className="font-ui text-gold">ANTHROPIC_API_KEY</code> in Vercel (or{" "}
-          <code className="font-ui text-sm text-stone-300">reader-app/.env.local</code> locally). Voice defaults to{" "}
+          Keys stay on the server only. Add <code className="font-ui text-gold">OPENAI_API_KEY</code> for voice.
+          For the companion LLM, use either{" "}
+          <code className="font-ui text-gold">OPENROUTER_API_KEY</code> (recommended; optional{" "}
+          <code className="font-ui text-gold">OPENROUTER_MODEL</code>) or direct{" "}
+          <code className="font-ui text-gold">ANTHROPIC_API_KEY</code> — OpenRouter wins if both are set. Configure in
+          Vercel or <code className="font-ui text-sm text-stone-300">.env.local</code>. Voice defaults to{" "}
           <span className="text-gold">onyx</span> — change it on the content screen.
         </p>
       </div>
