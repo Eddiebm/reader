@@ -1,6 +1,7 @@
 import { Readability } from "@mozilla/readability";
 import { JSDOM } from "jsdom";
 import { NextResponse } from "next/server";
+import { BlockedUrlError, fetchPublicUrl } from "@/lib/safe-fetch";
 
 export const runtime = "nodejs";
 
@@ -37,18 +38,21 @@ export async function POST(req: Request) {
 
   let html: string;
   try {
-    const res = await fetch(url.toString(), {
+    // Public addresses only, every redirect re-checked: this route returns the page's text.
+    const res = await fetchPublicUrl(url.toString(), {
       signal: ctrl.signal,
       headers: {
         "User-Agent":
           "Mozilla/5.0 (compatible; ReaderPhaseOne/0.1; +https://vercel.com) AppleWebKit/537.36",
         Accept: "text/html,application/xhtml+xml",
       },
-      redirect: "follow",
     });
     html = await res.text();
   } catch (e) {
     clearTimeout(t);
+    if (e instanceof BlockedUrlError) {
+      return NextResponse.json({ error: e.message }, { status: 400 });
+    }
     const msg = e instanceof Error ? e.message : "Fetch failed.";
     return NextResponse.json({ error: msg }, { status: 502 });
   } finally {
