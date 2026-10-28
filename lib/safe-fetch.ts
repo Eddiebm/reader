@@ -1,5 +1,7 @@
 import { lookup } from "node:dns/promises";
-import { isIP } from "node:net";
+import http from "node:http";
+import https from "node:https";
+import { isIP, type LookupFunction } from "node:net";
 
 /**
  * Fetching a URL a visitor pasted, without letting it reach places it
@@ -9,12 +11,13 @@ import { isIP } from "node:net";
  * time and each hop is checked again, since a public page can redirect
  * anywhere.
  *
- * The address is checked before the request, and fetch resolves the name
- * again when it connects, so a DNS answer that changes in between isn't
- * covered. That gap is narrow compared with fetching any URL as-is.
+ * The check that counts happens when the socket connects: the request is
+ * made with a lookup that refuses blocked addresses, so a DNS server can't
+ * pass the check with a public answer and then hand the connection 127.0.0.1.
  */
 
 const MAX_REDIRECTS = 5;
+const MAX_BODY_BYTES = 5_000_000;
 
 function ipv4Blocked(ip: string): boolean {
   const [a, b, c] = ip.split(".").map(Number);
@@ -83,6 +86,50 @@ export async function publicUrl(raw: string, base?: string, resolve: Lookup = sy
 
 export class BlockedUrlError extends Error {}
 
+/** A socket lookup that only ever hands back public addresses. */
+function checkedLookup(resolve: Lookup): LookupFunction {
+  return (hostname, options, callback) => {
+    resolve(hostname).then(
+      (records) => {
+        if (!records.length || records.some((r) => isBlockedAddress(r.address))) {
+          return callback(new BlockedUrlError("That address can't be fetched."), "", 0);
+        }
+        const addresses = records.map((r) => ({ address: r.address, family: isIP(r.address) }));
+        if (options.all) return (callback as unknown as (err: null, all: typeof addresses) => void)(null, addresses);
+        callback(null, addresses[0].address, addresses[0].family);
+      },
+      (err: NodeJS.ErrnoException) => callback(err, "", 0),
+    );
+  };
+}
+
+/** One GET, connected through checkedLookup, without following redirects. */
+function getOnce(url: URL, init: { headers?: Record<string, string>; signal?: AbortSignal }, resolve: Lookup): Promise<Response> {
+  const client = url.protocol === "https:" ? https : http;
+  return new Promise((done, fail) => {
+    const req = client.get(url, { headers: init.headers, signal: init.signal, lookup: checkedLookup(resolve) }, (res) => {
+      const chunks: Buffer[] = [];
+      let size = 0;
+      res.on("data", (chunk: Buffer) => {
+        size += chunk.length;
+        if (size > MAX_BODY_BYTES) res.destroy(new Error("That page is too large."));
+        else chunks.push(chunk);
+      });
+      res.on("error", fail);
+      res.on("end", () => {
+        const status = res.statusCode ?? 502;
+        const headers = new Headers();
+        for (const [name, value] of Object.entries(res.headers)) {
+          if (value !== undefined) headers.set(name, Array.isArray(value) ? value.join(", ") : value);
+        }
+        const body = [204, 205, 304].includes(status) ? null : Buffer.concat(chunks);
+        done(new Response(body, { status, headers }));
+      });
+    });
+    req.on("error", fail);
+  });
+}
+
 /** GET a visitor-supplied URL, following redirects one checked hop at a time. */
 export async function fetchPublicUrl(
   raw: string,
@@ -92,7 +139,7 @@ export async function fetchPublicUrl(
   let url = await publicUrl(raw, undefined, resolve);
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
     if (!url) throw new BlockedUrlError("That address can't be fetched.");
-    const res = await fetch(url, { headers: init.headers, signal: init.signal, redirect: "manual" });
+    const res = await getOnce(url, init, resolve);
     const location = res.headers.get("location");
     if (res.status < 300 || res.status >= 400 || !location) return res;
     url = await publicUrl(location, url.toString(), resolve);
